@@ -1,7 +1,4 @@
 Kết nối giao diện web
-Nếu thiết bị kết nối WiFi:
-Mở trình duyệt, nhập IP hiển thị trên OLED (ví dụ: http://192.168.1.100).
-Hoặc nhập hostname (ví dụ: http://weatherstation-abcdef.local) nếu router hỗ trợ mDNS.
 Nếu thiết bị ở chế độ AP:
 Trên điện thoại/máy tính, kết nối WiFi có tên như WeatherStation (không cần mật khẩu).
 Mở trình duyệt, nhập IP AP (192.168.4.1).
