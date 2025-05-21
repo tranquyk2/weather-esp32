@@ -9,6 +9,8 @@
 #include <TimeLib.h>
 #include <WebServer.h>
 #include <EEPROM.h>
+#include <ESPmDNS.h>
+#include <Update.h>
 
 // Cấu trúc lưu trữ cấu hình trong EEPROM
 struct Config {
@@ -16,7 +18,7 @@ struct Config {
   char password[32];
   char city[32];
   bool configured;
-  int displayLayout; // 0: Original, 1: New layout
+  int displayLayout; // 0: Original, 1: New layout, 2: Clock layout
 };
 
 // Biến toàn cục
@@ -40,10 +42,8 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* 
 
 // Dữ liệu ảnh XBM cho layout gốc
 static const unsigned char image_menu_home_bits[] = {
-  0x80,0x00,0x48,0x01,0x38,0x02,0x98,0x04,
-  0x48,0x09,0x24,0x12,0x12,0x24,0x09,0x48,
-  0x66,0x30,0x64,0x10,0x04,0x17,0x04,0x15,
-  0x04,0x17,0x04,0x15,0xfc,0x1f,0x00,0x00
+  0x80,0x00,0x48,0x01,0x38,0x02,0x98,0x04,0x48,0x09,0x24,0x12,0x12,0x24,0x09,0x48,
+  0x66,0x30,0x64,0x10,0x04,0x17,0x04,0x15,0x04,0x17,0x04,0x15,0xfc,0x1f,0x00,0x00
 };
 
 // Dữ liệu ảnh XBM cho layout mới
@@ -53,7 +53,7 @@ static const unsigned char image_Layer_12_bits[] = {
 };
 
 static const unsigned char image_Layer_2_bits[] = {
-  0x38,0x00,0x44,0x40,0xd4,0xa0,0x54,0x40,0xd4,0x1c,0x54,0x06,0xd4,0x02,0x54,0x02,
+  0x38,0x00,0x44,0x40,0xd4,0xa0,0x54,0x40,0xd4,0x1c,0x54,0x06,0x54,0x02,0x54,0x02,
   0x54,0x06,0x92,0x1c,0x39,0x01,0x75,0x01,0x7d,0x01,0x39,0x01,0x82,0x00,0x7c,0x00
 };
 
@@ -99,6 +99,103 @@ bool showIP = true;
 unsigned long ipDisplayStartTime = 0;
 const unsigned long IP_DISPLAY_DURATION = 10000; // Hiển thị IP trong 10 giây
 
+// Biến cho OTA
+const char* host = "weatherstation";
+String updateStatus = "";
+bool isUpdating = false;
+
+// Trang HTML cho đăng nhập OTA
+const char* loginIndex =
+ "<form name='loginForm'>"
+    "<table width='20%' bgcolor='A09F9F' align='center'>"
+        "<tr>"
+            "<td colspan=2>"
+                "<center><font size=4><b>Weather Station OTA Login</b></font></center>"
+                "<br>"
+            "</td>"
+            "<br>"
+            "<br>"
+        "</tr>"
+        "<tr>"
+            "<td>Username:</td>"
+            "<td><input type='text' size=25 name='userid'><br></td>"
+        "</tr>"
+        "<br>"
+        "<br>"
+        "<tr>"
+            "<td>Password:</td>"
+            "<td><input type='Password' size=25 name='pwd'><br></td>"
+            "<br>"
+            "<br>"
+        "</tr>"
+        "<tr>"
+            "<td><input type='submit' onclick='check(this.form)' value='Login'></td>"
+        "</tr>"
+    "</table>"
+"</form>"
+"<script>"
+    "function check(form)"
+    "{"
+    "if(form.userid.value=='admin' && form.pwd.value=='admin')"
+    "{"
+    "window.open('/ota')"
+    "}"
+    "else"
+    "{"
+    " alert('Sai Username hoặc Password')"
+    "}"
+    "}"
+"</script>";
+
+// Trang HTML cho giao diện OTA
+const char* otaIndex =
+"<script src='https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js'></script>"
+"<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
+    "<table width='100%' bgcolor='A09F9F' align='center'>"
+        "<tr>"
+            "<td align='center'><input type='file' name='update'></td>"
+        "</tr>"
+        "<tr>"
+            "<td align='center'><input type='submit' value='Cập nhật'></td>"
+        "</tr>"
+        "<tr>"
+            "<td align='center'><div id='prg'></div></td>"
+        "</tr>"
+    "</table>"
+"</form>"
+"<script>"
+    "$('form').submit(function(e){"
+    "e.preventDefault();"
+    "var form = $('#upload_form')[0];"
+    "var data = new FormData(form);"
+    " $.ajax({"
+    "url: '/update',"
+    "type: 'POST',"
+    "data: data,"
+    "contentType: false,"
+    "processData:false,"
+    "xhr: function() {"
+    "var xhr = new window.XMLHttpRequest();"
+    "xhr.upload.addEventListener('progress', function(evt) {"
+    "if (evt.lengthComputable) {"
+    "var per = evt.loaded / evt.total;"
+    "var progress = Math.round(per*100);"
+    "$('#prg').html('Tiến trình: ' + progress + '%');"
+    "$('#prg').css('width', progress + '%');"
+    "}"
+    "}, false);"
+    "return xhr;"
+    "},"
+    "success:function(d, s) {"
+    "console.log('Thành công!')"
+    "},"
+    "error: function (a, b, c) {"
+    "console.log('Lỗi!')"
+    "}"
+    "});"
+    "});"
+"</script>";
+
 // Hàm chuyển đổi trạng thái thời tiết sang tiếng Việt không dấu
 String getVietnameseWeather(String englishWeather) {
   englishWeather.toLowerCase();
@@ -120,8 +217,8 @@ const unsigned char* getWeatherIcon(String weather) {
   if (weather == "co may") return image_weather_cloud_sunny_bits;
   if (weather == "bao") return image_weather_wind_bits;
   if (weather == "tuyet") return image_weather_frost_bits;
-  if (weather == "troi nang") return image_weather_cloud_sunny_bits; // Sử dụng icon 17x16
-  return image_weather_cloud_sunny_bits; // Mặc định
+  if (weather == "troi nang") return image_weather_cloud_sunny_bits;
+  return image_weather_cloud_sunny_bits;
 }
 
 // Hàm đọc cấu hình từ EEPROM
@@ -129,8 +226,6 @@ void loadConfig() {
   EEPROM.begin(sizeof(Config));
   EEPROM.get(0, config);
   EEPROM.end();
-
-  // Kiểm tra nếu chưa có cấu hình
   if (!config.configured) {
     strcpy(config.ssid, "21 LQS T2");
     strcpy(config.password, "0901140014");
@@ -153,7 +248,8 @@ void saveConfig() {
 void displayIPAddress() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_profont11_tr);
-  
+  u8g2.setFontMode(0);
+  u8g2.setBitmapMode(1);
   if (WiFi.status() == WL_CONNECTED) {
     u8g2.drawStr(10, 20, "WiFi Connected");
     u8g2.drawStr(10, 35, "IP Address:");
@@ -163,7 +259,26 @@ void displayIPAddress() {
     u8g2.drawStr(10, 35, "Connect to: WeatherStation");
     u8g2.drawStr(10, 50, WiFi.softAPIP().toString().c_str());
   }
-  
+  u8g2.sendBuffer();
+}
+
+// Hàm hiển thị trạng thái OTA trên OLED
+void displayOTAStatus(String status, int progress = 0, String filename = "") {
+  u8g2.clearBuffer();
+  u8g2.setFont(u8g2_font_profont11_tr);
+  u8g2.setFontMode(0);
+  u8g2.setBitmapMode(1);
+  u8g2.drawStr(10, 20, "OTA Update");
+  u8g2.drawStr(10, 35, status.c_str());
+  if (filename != "") {
+    u8g2.drawStr(10, 50, ("File: " + filename.substring(0, 12)).c_str());
+  }
+  if (progress > 0) {
+    u8g2.drawFrame(10, 55, 108, 8);
+    u8g2.drawBox(10, 55, progress * 108 / 100, 8);
+    u8g2.setFont(u8g2_font_profont10_tr);
+    u8g2.drawStr(50, 63, (String(progress) + "%").c_str());
+  }
   u8g2.sendBuffer();
 }
 
@@ -171,14 +286,12 @@ void displayIPAddress() {
 void connectWiFi() {
   WiFi.begin(config.ssid, config.password);
   Serial.print("Connecting to WiFi");
-  
   int attempts = 0;
   while (WiFi.status() != WL_CONNECTED && attempts < 20) {
     delay(500);
     Serial.print(".");
     attempts++;
   }
-  
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("Failed to connect to WiFi");
     WiFi.mode(WIFI_AP);
@@ -189,8 +302,6 @@ void connectWiFi() {
     Serial.println("Connected");
     Serial.println("IP address: " + WiFi.localIP().toString());
   }
-
-  // Hiển thị IP ngay sau khi kết nối
   showIP = true;
   ipDisplayStartTime = millis();
   displayIPAddress();
@@ -216,7 +327,6 @@ void updateApiUrls() {
 void handleRoot() {
   String ipAddress = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
   String wifiOptions = scanWiFiNetworks();
-  
   String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
   html += "<title>Weather Station</title>";
   html += "<style>";
@@ -236,14 +346,12 @@ void handleRoot() {
   html += "<body><div class='container'>";
   html += "<h1>Weather Station Config</h1>";
   html += "<div class='info-box'>Current IP: " + ipAddress + "</div>";
-  
   html += "<div class='tab'>";
   html += "<button class='tablinks' onclick=\"openTab('wifi')\">WiFi</button>";
   html += "<button class='tablinks' onclick=\"openTab('location')\">Location</button>";
   html += "<button class='tablinks' onclick=\"openTab('display')\">Display</button>";
+  html += "<button class='tablinks' onclick=\"openTab('ota')\">OTA Update</button>";
   html += "</div>";
-  
-  // Tab WiFi
   html += "<div id='wifi' class='tabcontent'>";
   html += "<h2>WiFi Settings</h2>";
   html += "<form action='/savewifi' method='post'>";
@@ -254,8 +362,6 @@ void handleRoot() {
   html += "<button type='submit'>Save WiFi</button>";
   html += "</form>";
   html += "</div>";
-  
-  // Tab Location
   html += "<div id='location' class='tabcontent'>";
   html += "<h2>Location Settings</h2>";
   html += "<form action='/savelocation' method='post'>";
@@ -264,8 +370,6 @@ void handleRoot() {
   html += "<button type='submit'>Save Location</button>";
   html += "</form>";
   html += "</div>";
-  
-  // Tab Display
   html += "<div id='display' class='tabcontent'>";
   html += "<h2>Display Settings</h2>";
   html += "<form action='/savedisplay' method='post'>";
@@ -273,11 +377,17 @@ void handleRoot() {
   html += "<select name='layout'>";
   html += "<option value='0'" + String(config.displayLayout == 0 ? " selected" : "") + ">Original Layout</option>";
   html += "<option value='1'" + String(config.displayLayout == 1 ? " selected" : "") + ">New Layout</option>";
+  html += "<option value='2'" + String(config.displayLayout == 2 ? " selected" : "") + ">Clock Layout</option>";
   html += "</select>";
   html += "<button type='submit'>Save Display</button>";
   html += "</form>";
   html += "</div>";
-  
+  html += "<div id='ota' class='tabcontent'>";
+  html += "<h2>OTA Update</h2>";
+  html += "<form action='/otalogin'>";
+  html += "<button type='submit'>Go to OTA Login</button>";
+  html += "</form>";
+  html += "</div>";
   html += "<script>";
   html += "function openTab(tabName) {";
   html += "var i, tabcontent = document.getElementsByClassName('tabcontent'), tablinks = document.getElementsByClassName('tablinks');";
@@ -287,9 +397,7 @@ void handleRoot() {
   html += "event.currentTarget.className+=' active';}";
   html += "document.getElementsByClassName('tablinks')[0].click();";
   html += "</script>";
-  
   html += "</div></body></html>";
-  
   server.send(200, "text/html", html);
 }
 
@@ -299,9 +407,7 @@ void handleSaveWifi() {
     strncpy(config.ssid, server.arg("ssid").c_str(), sizeof(config.ssid));
     strncpy(config.password, server.arg("password").c_str(), sizeof(config.password));
     saveConfig();
-    
     server.send(200, "text/html", "<!DOCTYPE html><html><body><h1>WiFi Settings Saved</h1><p>Reconnecting...</p><script>setTimeout(() => location.href='/', 2000);</script></body></html>");
-    
     WiFi.disconnect();
     connectWiFi();
   } else {
@@ -316,7 +422,6 @@ void handleSaveLocation() {
     saveConfig();
     updateApiUrls();
     getWeatherData();
-    
     server.send(200, "text/html", "<!DOCTYPE html><html><body><h1>Location Saved</h1><p>Weather data updating...</p><script>setTimeout(() => location.href='/', 2000);</script></body></html>");
   } else {
     server.send(400, "text/html", "<!DOCTYPE html><html><body><h1>Error</h1><p>Missing city parameter</p><a href='/'>Back</a></body></html>");
@@ -328,96 +433,52 @@ void handleSaveDisplay() {
   if (server.hasArg("layout")) {
     config.displayLayout = server.arg("layout").toInt();
     saveConfig();
-    
     server.send(200, "text/html", "<!DOCTYPE html><html><body><h1>Display Settings Saved</h1><p>Display updating...</p><script>setTimeout(() => location.href='/', 2000);</script></body></html>");
   } else {
     server.send(400, "text/html", "<!DOCTYPE html><html><body><h1>Error</h1><p>Missing layout parameter</p><a href='/'>Back</a></body></html>");
   }
 }
 
-void setup() {
-  Serial.begin(115200);
-  
-  // Khởi tạo EEPROM và đọc cấu hình
-  EEPROM.begin(sizeof(Config));
-  loadConfig();
-  
-  // Khởi tạo I2C và OLED
-  myWire.begin(26, 27);
-  u8g2.setBusClock(400000);
-  u8g2.begin();
-
-  // Kết nối WiFi
-  connectWiFi();
-  
-  // Cập nhật URL API
-  updateApiUrls();
-
-  // Khởi tạo NTP
-  timeClient.begin();
-  timeClient.update();
-  setTime(timeClient.getEpochTime());
-
-  // Cấu hình web server
-  server.on("/", handleRoot);
-  server.on("/savewifi", HTTP_POST, handleSaveWifi);
-  server.on("/savelocation", HTTP_POST, handleSaveLocation);
-  server.on("/savedisplay", HTTP_POST, handleSaveDisplay);
-  server.begin();
-  Serial.println("HTTP server started");
-
-  // Lấy dữ liệu thời tiết lần đầu
-  getWeatherData();
+// Xử lý trang đăng nhập OTA
+void handleOTALogin() {
+  server.sendHeader("Connection", "close");
+  server.send(200, "text/html", loginIndex);
+  displayOTAStatus("OTA Login Page");
 }
 
-void loop() {
-  server.handleClient();
-  
-  if (showIP && millis() - ipDisplayStartTime < IP_DISPLAY_DURATION) {
-    displayIPAddress();
-  } else {
-    showIP = false;
-    if (WiFi.status() == WL_CONNECTED) {
-      timeClient.update();
-      setTime(timeClient.getEpochTime());
-      
-      static unsigned long lastWeatherUpdate = 0;
-      if (millis() - lastWeatherUpdate > 600000 || lastWeatherUpdate == 0) {
-        getWeatherData();
-        lastWeatherUpdate = millis();
-      }
+// Xử lý trang OTA
+void handleOTA() {
+  server.sendHeader("Connection", "close");
+  server.send(200, "text/html", otaIndex);
+  displayOTAStatus("OTA Upload Page", 0, "Ready");
+}
 
-      displayOLED();
-    } else {
-      // Hiển thị thông báo khi mất kết nối WiFi
-      u8g2.clearBuffer();
-      u8g2.setFont(u8g2_font_profont11_tr);
-      u8g2.drawStr(10, 20, "No WiFi connection");
-      u8g2.drawStr(10, 35, "Connect to AP:");
-      u8g2.drawStr(10, 50, "WeatherStation");
-      u8g2.sendBuffer();
-    }
+// Xử lý cập nhật OTA
+void handleOTAUpdate() {
+  server.sendHeader("Connection", "close");
+  bool updateSuccess = !Update.hasError();
+  server.send(200, "text/plain", updateSuccess ? "Cập nhật THÀNH CÔNG! Thiết bị đang khởi động lại..." : "Cập nhật THẤT BẠI!");
+  displayOTAStatus(updateSuccess ? "THANH CONG!" : "THAT BAI!");
+  if (updateSuccess) {
+    displayOTAStatus("Dang khoi dong lai...");
+    delay(1000);
+    ESP.restart();
   }
-  
-  delay(1000);
 }
 
+// Hàm lấy dữ liệu thời tiết
 void getWeatherData() {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("No WiFi connection - cannot get weather data");
     return;
   }
-
   HTTPClient http;
-
-  // Lấy dữ liệu thời tiết hiện tại
   http.begin(weatherUrl);
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
     DynamicJsonDocument doc(1024);
     deserializeJson(doc, payload);
-
     temp = doc["main"]["temp"];
     humidity = doc["main"]["humidity"];
     dewPoint = temp - ((100 - humidity) / 5.0);
@@ -425,15 +486,12 @@ void getWeatherData() {
     Serial.println("Failed to get current weather data");
   }
   http.end();
-
-  // Lấy dữ liệu dự báo
   http.begin(forecastUrl);
   httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
     DynamicJsonDocument doc(2048);
     deserializeJson(doc, payload);
-
     time_t now = timeClient.getEpochTime();
     time_t tomorrowNoon = now + 24 * 3600;
     struct tm *timeInfo = localtime(&tomorrowNoon);
@@ -441,7 +499,6 @@ void getWeatherData() {
     timeInfo->tm_min = 0;
     timeInfo->tm_sec = 0;
     tomorrowNoon = mktime(timeInfo);
-
     JsonArray list = doc["list"];
     for (JsonObject forecast : list) {
       long forecastTime = forecast["dt"];
@@ -449,7 +506,7 @@ void getWeatherData() {
         tomorrowTemp = forecast["main"]["temp"];
         tomorrowHumidity = forecast["main"]["humidity"];
         tomorrowWeather = getVietnameseWeather(forecast["weather"][0]["main"].as<String>());
-        Serial.println("Tomorrow Weather: " + tomorrowWeather); // Debug
+        Serial.println("Tomorrow Weather: " + tomorrowWeather);
         break;
       }
     }
@@ -459,83 +516,165 @@ void getWeatherData() {
   http.end();
 }
 
+// Hàm hiển thị trên OLED
 void displayOLED() {
   u8g2.clearBuffer();
-  u8g2.setFontMode(1);
+  u8g2.setFontMode(0);
   u8g2.setBitmapMode(1);
 
   if (config.displayLayout == 0) {
-    // Layout gốc: Hiển thị text trạng thái thời tiết
     String timeStr = timeClient.getFormattedTime();
     String dateStr = String(day()) + "." + String(month()) + "." + String(year() % 100);
     String timeDate = timeStr + " - " + dateStr;
     u8g2.setFont(u8g2_font_profont11_tr);
     u8g2.drawStr(7, 7, timeDate.c_str());
-
     u8g2.drawLine(7, 11, 119, 11);
     u8g2.drawLine(62, 17, 62, 55);
-
-    // Hiển thị nhiệt độ và độ ẩm hiện tại
     u8g2.setFont(u8g2_font_helvB08_tr);
     String humStr = String(humidity, 1) + " %";
     String tempStr = String(temp, 1) + " C";
     u8g2.drawStr(21, 36, humStr.c_str());
     u8g2.drawStr(21, 25, tempStr.c_str());
-
-    // Hiển thị dự báo ngày hôm sau
     String tomorrowHumStr = String(tomorrowHumidity, 1) + " %";
     String tomorrowTempStr = String(tomorrowTemp, 1) + " C";
     u8g2.drawStr(88, 36, tomorrowHumStr.c_str());
     u8g2.drawStr(88, 25, tomorrowTempStr.c_str());
-
-    // Hiển thị thành phố và trạng thái thời tiết
     u8g2.setFont(u8g2_font_profont12_tr);
     u8g2.drawStr(7, 62, config.city);
     u8g2.drawStr(73, 62, tomorrowWeather.c_str());
-
-    // Icon XBM
-    u8g2.drawXBM(66, 17, 17, 17, image_weather_cloud_sunny_bits);
+    u8g2.drawXBM(66, 17, 17, 17, getWeatherIcon(tomorrowWeather));
     u8g2.drawXBM(2, 17, 15, 17, image_menu_home_bits);
-
     u8g2.drawLine(62, 50, 62, 63);
     u8g2.drawLine(7, 42, 119, 42);
-  } else {
-    // Layout mới: Hiển thị icon thời tiết
+  } else if (config.displayLayout == 1) {
     String timeStr = timeClient.getFormattedTime();
     String dateStr = String(day()) + "." + String(month()) + "." + String(year() % 100);
     String timeDate = timeStr + " - " + dateStr;
     u8g2.setFont(u8g2_font_profont11_tr);
     u8g2.drawStr(7, 7, timeDate.c_str());
-
     u8g2.drawXBM(6, 13, 16, 16, image_Layer_2_bits);
-
     u8g2.setFont(u8g2_font_helvB08_tr);
     String tempStr = String(temp, 1) + " C";
     String tomorrowTempStr = String(tomorrowTemp, 1) + " C";
     String humStr = String(humidity, 1) + " %";
     String tomorrowHumStr = String(tomorrowHumidity, 1) + " %";
-
     u8g2.drawStr(24, 24, tempStr.c_str());
     u8g2.drawStr(91, 24, tomorrowTempStr.c_str());
     u8g2.drawStr(23, 43, humStr.c_str());
     u8g2.drawStr(90, 43, tomorrowHumStr.c_str());
-
     u8g2.drawLine(0, 9, 127, 9);
     u8g2.drawLine(63, 13, 63, 63);
-
     u8g2.drawXBM(90, 48, 17, 16, getWeatherIcon(tomorrowWeather));
-
     u8g2.setFont(u8g2_font_profont11_tr);
     u8g2.drawStr(3, 59, config.city);
-
     u8g2.drawXBM(72, 13, 16, 16, image_Layer_2_bits);
     u8g2.drawXBM(5, 30, 11, 16, image_Layer_12_bits);
     u8g2.drawXBM(71, 30, 11, 16, image_Layer_12_bits);
-
     u8g2.drawLine(0, 47, 127, 47);
     u8g2.drawLine(24, 29, 54, 29);
     u8g2.drawLine(91, 29, 121, 29);
+  } else if (config.displayLayout == 2) {
+    // Giao diện đồng hồ mới
+    String timeStr = timeClient.getFormattedTime().substring(0, 5); // Lấy HH:MM
+    u8g2.setFontMode(1); // Trong suốt để phù hợp với đồng hồ
+    u8g2.setFont(u8g2_font_timR24_tr);
+    u8g2.drawStr(20, 43, timeStr.c_str());
   }
 
   u8g2.sendBuffer();
+}
+
+void setup() {
+  Serial.begin(115200);
+  EEPROM.begin(sizeof(Config));
+  loadConfig();
+  myWire.begin(26, 27);
+  u8g2.setBusClock(400000);
+  u8g2.begin();
+  u8g2.setFontMode(0);
+  u8g2.setBitmapMode(1);
+  connectWiFi();
+  if (MDNS.begin(host)) {
+    Serial.println("mDNS started: http://" + String(host) + ".local");
+  }
+  updateApiUrls();
+  timeClient.begin();
+  timeClient.update();
+  setTime(timeClient.getEpochTime());
+  server.on("/", handleRoot);
+  server.on("/savewifi", HTTP_POST, handleSaveWifi);
+  server.on("/savelocation", HTTP_POST, handleSaveLocation);
+  server.on("/savedisplay", HTTP_POST, handleSaveDisplay);
+  server.on("/otalogin", HTTP_GET, handleOTALogin);
+  server.on("/ota", HTTP_GET, handleOTA);
+  server.on("/update", HTTP_POST, handleOTAUpdate, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      Serial.printf("Cập nhật: %s\n", upload.filename.c_str());
+      isUpdating = true;
+      updateStatus = "Dang cap nhat...";
+      displayOTAStatus("Dang cap nhat...", 0, upload.filename);
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+        updateStatus = "Loi: Khong the bat dau!";
+        displayOTAStatus(updateStatus);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      int progress = (upload.totalSize > 0) ? (upload.currentSize * 100 / upload.totalSize) : 0;
+      if (progress % 10 == 0) {
+        displayOTAStatus("Dang cap nhat...", progress, upload.filename);
+      }
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+        updateStatus = "Loi: Ghi du lieu!";
+        displayOTAStatus(updateStatus);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        Serial.printf("Cập nhật thành công: %u bytes\n", upload.totalSize);
+        updateStatus = "Cap nhat thanh cong!";
+        displayOTAStatus(updateStatus, 100, upload.filename);
+      } else {
+        Update.printError(Serial);
+        updateStatus = "Loi: Hoan tat cap nhat!";
+        displayOTAStatus(updateStatus);
+      }
+      isUpdating = false;
+    }
+  });
+  server.begin();
+  Serial.println("HTTP server started");
+  getWeatherData();
+}
+
+void loop() {
+  server.handleClient();
+  if (isUpdating) {
+    return;
+  }
+  if (showIP && millis() - ipDisplayStartTime < IP_DISPLAY_DURATION) {
+    displayIPAddress();
+  } else {
+    showIP = false;
+    if (WiFi.status() == WL_CONNECTED) {
+      timeClient.update();
+      setTime(timeClient.getEpochTime());
+      static unsigned long lastWeatherUpdate = 0;
+      if (millis() - lastWeatherUpdate > 600000 || lastWeatherUpdate == 0) {
+        getWeatherData();
+        lastWeatherUpdate = millis();
+      }
+      displayOLED();
+    } else {
+      u8g2.clearBuffer();
+      u8g2.setFont(u8g2_font_profont11_tr);
+      u8g2.setFontMode(0);
+      u8g2.setBitmapMode(1);
+      u8g2.drawStr(10, 20, "No WiFi connection");
+      u8g2.drawStr(10, 35, "Connect to AP:");
+      u8g2.drawStr(10, 50, "WeatherStation");
+      u8g2.sendBuffer();
+    }
+  }
+  delay(1000);
 }
