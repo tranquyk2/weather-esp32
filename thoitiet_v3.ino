@@ -18,79 +18,68 @@ struct Config {
   char password[32];
   char city[32];
   bool configured;
-  int displayLayout; // 0: Original, 1: New layout, 2: Clock layout
+  int displayLayout;
 };
 
 // Biến toàn cục
 Config config;
 WebServer server(80);
-
-// OpenWeatherMap API
 const char* weatherApiKey = "d59cd7cbe4d46110fbce95065c2bd3c9";
-String weatherUrl;
-String forecastUrl;
-
-// NTP Client
+String weatherUrl, forecastUrl;
 WiFiUDP ntpUDP;
-NTPClient timeClient(ntpUDP, "pool.ntp.org", 7 * 3600, 60000); // GMT+7 for Vietnam
-
-// Khởi tạo I2C với chân SDA = 26, SCL = 27
+NTPClient timeClient(ntpUDP, "pool.ntp.org", 7 * 3600, 60000);
 TwoWire myWire = TwoWire(0);
+U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, U8X8_PIN_NONE, 27, 26);
+float temp = 0.0, humidity = 0.0, dewPoint = 0.0;
+float tomorrowTemp = 0.0, tomorrowHumidity = 0.0;
+String tomorrowWeather = "";
+bool showIP = true;
+unsigned long ipDisplayStartTime = 0;
+const unsigned long IP_DISPLAY_DURATION = 10000;
+const char* host = "weatherstation";
+String updateStatus = "";
+bool isUpdating = false;
 
-// Khởi tạo OLED
-U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0, /* reset=*/ U8X8_PIN_NONE, /* clock=*/ 27, /* data=*/ 26);
-
-// Dữ liệu ảnh XBM cho layout gốc
+// Dữ liệu ảnh XBM (giữ nguyên)
 static const unsigned char image_menu_home_bits[] = {
   0x80,0x00,0x48,0x01,0x38,0x02,0x98,0x04,0x48,0x09,0x24,0x12,0x12,0x24,0x09,0x48,
   0x66,0x30,0x64,0x10,0x04,0x17,0x04,0x15,0x04,0x17,0x04,0x15,0xfc,0x1f,0x00,0x00
 };
-
-// Dữ liệu ảnh XBM cho layout mới
 static const unsigned char image_Layer_12_bits[] = {
   0x20,0x00,0x20,0x00,0x30,0x00,0x50,0x00,0x48,0x00,0x88,0x00,0x04,0x01,0x04,0x01,
   0x82,0x02,0x02,0x03,0x01,0x05,0x01,0x04,0x02,0x02,0x02,0x02,0x0c,0x01,0xf0,0x00
 };
-
 static const unsigned char image_Layer_2_bits[] = {
   0x38,0x00,0x44,0x40,0xd4,0xa0,0x54,0x40,0xd4,0x1c,0x54,0x06,0x54,0x02,0x54,0x02,
   0x54,0x06,0x92,0x1c,0x39,0x01,0x75,0x01,0x7d,0x01,0x39,0x01,0x82,0x00,0x7c,0x00
 };
-
-// Dữ liệu ảnh XBM cho thời tiết
 static const unsigned char image_weather_cloud_rain_bits[] = {
   0x00,0x00,0x00,0xe0,0x03,0x00,0x10,0x04,0x00,0x08,0x08,0x00,0x0c,0x10,0x00,0x02,
   0x70,0x00,0x01,0x80,0x00,0x01,0x00,0x01,0x02,0x00,0x01,0xfc,0xff,0x00,0x80,0x08,
   0x00,0x44,0x44,0x00,0x22,0x21,0x00,0x89,0x14,0x00,0x44,0x02,0x00,0x00,0x01,0x00
 };
-
 static const unsigned char image_weather_cloud_snow_bits[] = {
   0x00,0x00,0x00,0xe0,0x03,0x00,0x10,0x04,0x00,0x08,0x08,0x00,0x0c,0x10,0x00,0x02,
   0x70,0x00,0x01,0x80,0x00,0x01,0x00,0x01,0x02,0x00,0x01,0xfc,0xff,0x00,0x00,0x00,
   0x00,0x90,0x52,0x00,0x04,0x00,0x00,0x10,0x09,0x00,0x44,0x22,0x00,0x00,0x00,0x00
 };
-
 static const unsigned char image_weather_cloud_sunny_bits[] = {
   0x00,0x04,0x00,0x40,0x40,0x00,0x00,0x0e,0x00,0x80,0x31,0x00,0x90,0x20,0x01,0x40,
   0x40,0x00,0x40,0x40,0x00,0xe0,0x41,0x00,0x10,0x22,0x01,0x08,0x34,0x00,0x0c,0x0c,
   0x00,0x06,0x78,0x00,0x01,0xc0,0x00,0x01,0x80,0x00,0x01,0x80,0x00,0xfe,0x7f,0x00
 };
-
 static const unsigned char image_weather_frost_bits[] = {
   0x80,0x00,0xc8,0x09,0x8c,0x18,0xce,0x39,0x90,0x04,0xa0,0x02,0xca,0x29,0x7f,0x7f,
   0xca,0x29,0xa0,0x02,0x90,0x04,0xce,0x39,0x8c,0x18,0xc8,0x09,0x80,0x00,0x00,0x00
 };
-
 static const unsigned char image_weather_wind_bits[] = {
   0x00,0x00,0x00,0x00,0x00,0x0c,0xc0,0x11,0x20,0x22,0x20,0x22,0x00,0x22,0x00,0x11,
   0xff,0x4c,0x00,0x00,0xb5,0x41,0x00,0x06,0x00,0x08,0x00,0x08,0x80,0x04,0x00,0x03
 };
-
 static const unsigned char image_Battery_bits[] = {
   0xfe,0xff,0x7f,0x00,0x01,0x00,0x80,0x00,0x01,0x00,0x80,0x03,0x01,0x00,0x80,0x02,
   0x01,0x00,0x80,0x02,0x01,0x00,0x80,0x03,0x01,0x00,0x80,0x00,0xfe,0xff,0x7f,0x00};
 static const unsigned char image_Layer_57_bits[] = {0x03,0x03};
-
 static const unsigned char image_Background_bits[] = {
   0xfe,0xff,0xff,0xff,0x7f,0x00,0x00,0x80,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x01,
   0xff,0xff,0xff,0xff,0xff,0x00,0x00,0xc0,0xff,0xff,0xff,0xff,0xff,0xff,0xff,0x03,
@@ -121,117 +110,42 @@ static const unsigned char image_EviSmile1_bits[] = {
   0x03,0xc7,0x8f,0x03,0x87,0x87,0x03,0x8f,0xc7,0x03,0xff,0xff,0x03,0xfe,0xff,0x01,
   0xde,0xef,0x01,0xbc,0xf4,0x00,0x78,0x78,0x00,0xf0,0x3f,0x00,0xc0,0x0f,0x00};
 
-// Biến lưu dữ liệu thời tiết
-float temp = 0.0;
-float humidity = 0.0;
-float dewPoint = 0.0;
-float tomorrowTemp = 0.0;
-float tomorrowHumidity = 0.0;
-String tomorrowWeather = "";
+// Trang HTML OTA tối giản
+const char* loginIndex = R"rawliteral(
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>OTA Login</title>
+<style>body{font-family:Arial;margin:0 auto;padding:10px;text-align:center;background:#f0f0f0}
+input,button{padding:8px;margin:5px;width:200px;border:1px solid #ccc;border-radius:4px}
+button{background:#4CAF50;color:white;border:none;cursor:pointer}
+button:hover{background:#45a049}</style></head>
+<body><h2>Weather Station OTA Login</h2>
+<form name='loginForm'>
+<input type='text' name='userid' placeholder='Username'><br>
+<input type='password' name='pwd' placeholder='Password'><br>
+<button type='submit' onclick='check(this.form)'>Login</button></form>
+<script>function check(form){
+if(form.userid.value=='admin' && form.pwd.value=='admin'){window.open('/ota')}
+else{alert('Sai Username hoặc Password')}}</script></body></html>
+)rawliteral";
 
-// Biến kiểm soát hiển thị IP
-bool showIP = true;
-unsigned long ipDisplayStartTime = 0;
-const unsigned long IP_DISPLAY_DURATION = 10000; // Hiển thị IP trong 10 giây
+const char* otaIndex = R"rawliteral(
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>OTA Update</title>
+<style>body{font-family:Arial;margin:0 auto;padding:10px;text-align:center;background:#f0f0f0}
+input,button{padding:8px;margin:5px;width:200px;border:1px solid #ccc;border-radius:4px}
+button{background:#4CAF50;color:white;border:none;cursor:pointer}
+button:hover{background:#45a049}
+#prg{width:200px;height:10px;border:1px solid #ccc}</style></head>
+<body><h2>OTA Update</h2><form method='POST' action='/update' enctype='multipart/form-data' id='upload_form'>
+<input type='file' name='update'><br>
+<button type='submit'>Update</button><br><div id='prg'></div></form>
+<script>document.getElementById('upload_form').addEventListener('submit',function(e){
+e.preventDefault();var form=new FormData(this);var xhr=new XMLHttpRequest();
+xhr.upload.addEventListener('progress',function(evt){
+if(evt.lengthComputable){var per=Math.round(evt.loaded/evt.total*100);
+document.getElementById('prg').style.width=per+'%';document.getElementById('prg').innerText=per+'%';}},false);
+xhr.open('POST','/update');xhr.send(form);});</script></body></html>
+)rawliteral";
 
-// Biến cho OTA
-const char* host = "weatherstation";
-String updateStatus = "";
-bool isUpdating = false;
-
-// Trang HTML cho đăng nhập OTA
-const char* loginIndex =
- "<form name='loginForm'>"
-    "<table width='20%' bgcolor='A09F9F' align='center'>"
-        "<tr>"
-            "<td colspan=2>"
-                "<center><font size=4><b>Weather Station OTA Login</b></font></center>"
-                "<br>"
-            "</td>"
-            "<br>"
-            "<br>"
-        "</tr>"
-        "<tr>"
-            "<td>Username:</td>"
-            "<td><input type='text' size=25 name='userid'><br></td>"
-        "</tr>"
-        "<br>"
-        "<br>"
-        "<tr>"
-            "<td>Password:</td>"
-            "<td><input type='Password' size=25 name='pwd'><br></td>"
-            "<br>"
-            "<br>"
-        "</tr>"
-        "<tr>"
-            "<td><input type='submit' onclick='check(this.form)' value='Login'></td>"
-        "</tr>"
-    "</table>"
-"</form>"
-"<script>"
-    "function check(form)"
-    "{"
-    "if(form.userid.value=='admin' && form.pwd.value=='admin')"
-    "{"
-    "window.open('/ota')"
-    "}"
-    "else"
-    "{"
-    " alert('Sai Username hoặc Password')"
-    "}"
-    "}"
-"</script>";
-
-// Trang HTML cho giao diện OTA
-const char* otaIndex =
-"<script src='https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js'></script>"
-"<form method='POST' action='#' enctype='multipart/form-data' id='upload_form'>"
-    "<table width='100%' bgcolor='A09F9F' align='center'>"
-        "<tr>"
-            "<td align='center'><input type='file' name='update'></td>"
-        "</tr>"
-        "<tr>"
-            "<td align='center'><input type='submit' value='Cập nhật'></td>"
-        "</tr>"
-        "<tr>"
-            "<td align='center'><div id='prg'></div></td>"
-        "</tr>"
-    "</table>"
-"</form>"
-"<script>"
-    "$('form').submit(function(e){"
-    "e.preventDefault();"
-    "var form = $('#upload_form')[0];"
-    "var data = new FormData(form);"
-    " $.ajax({"
-    "url: '/update',"
-    "type: 'POST',"
-    "data: data,"
-    "contentType: false,"
-    "processData:false,"
-    "xhr: function() {"
-    "var xhr = new window.XMLHttpRequest();"
-    "xhr.upload.addEventListener('progress', function(evt) {"
-    "if (evt.lengthComputable) {"
-    "var per = evt.loaded / evt.total;"
-    "var progress = Math.round(per*100);"
-    "$('#prg').html('Tiến trình: ' + progress + '%');"
-    "$('#prg').css('width', progress + '%');"
-    "}"
-    "}, false);"
-    "return xhr;"
-    "},"
-    "success:function(d, s) {"
-    "console.log('Thành công!')"
-    "},"
-    "error: function (a, b, c) {"
-    "console.log('Lỗi!')"
-    "}"
-    "});"
-    "});"
-"</script>";
-
-// Hàm chuyển đổi trạng thái thời tiết sang tiếng Việt không dấu
+// Hàm chuyển đổi trạng thái thời tiết
 String getVietnameseWeather(String englishWeather) {
   englishWeather.toLowerCase();
   if (englishWeather == "clear") return "Troi nang";
@@ -252,7 +166,6 @@ const unsigned char* getWeatherIcon(String weather) {
   if (weather == "co may") return image_weather_cloud_sunny_bits;
   if (weather == "bao") return image_weather_wind_bits;
   if (weather == "tuyet") return image_weather_frost_bits;
-  if (weather == "troi nang") return image_weather_cloud_sunny_bits;
   return image_weather_cloud_sunny_bits;
 }
 
@@ -279,12 +192,10 @@ void saveConfig() {
   EEPROM.end();
 }
 
-// Hàm hiển thị địa chỉ IP trên OLED
+// Hàm hiển thị địa chỉ IP
 void displayIPAddress() {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_profont11_tr);
-  u8g2.setFontMode(0);
-  u8g2.setBitmapMode(1);
   if (WiFi.status() == WL_CONNECTED) {
     u8g2.drawStr(10, 20, "WiFi Connected");
     u8g2.drawStr(10, 35, "IP Address:");
@@ -297,12 +208,10 @@ void displayIPAddress() {
   u8g2.sendBuffer();
 }
 
-// Hàm hiển thị trạng thái OTA trên OLED
+// Hàm hiển thị trạng thái OTA
 void displayOTAStatus(String status, int progress = 0, String filename = "") {
   u8g2.clearBuffer();
   u8g2.setFont(u8g2_font_profont11_tr);
-  u8g2.setFontMode(0);
-  u8g2.setBitmapMode(1);
   u8g2.drawStr(10, 20, "OTA Update");
   u8g2.drawStr(10, 35, status.c_str());
   if (filename != "") {
@@ -310,7 +219,7 @@ void displayOTAStatus(String status, int progress = 0, String filename = "") {
   }
   if (progress > 0) {
     u8g2.drawFrame(10, 55, 108, 8);
-    u8g2.drawBox(10, 55, progress * 108 / 100, 8);
+    u8g2.drawBox(10, 55, progress, 8);
     u8g2.setFont(u8g2_font_profont10_tr);
     u8g2.drawStr(50, 63, (String(progress) + "%").c_str());
   }
@@ -332,10 +241,10 @@ void connectWiFi() {
     WiFi.mode(WIFI_AP);
     WiFi.softAP("WeatherStation");
     Serial.println("Access Point created");
-    Serial.println("IP address: " + WiFi.softAPIP().toString());
+    Serial.println("IP: " + WiFi.softAPIP().toString());
   } else {
     Serial.println("Connected");
-    Serial.println("IP address: " + WiFi.localIP().toString());
+    Serial.println("IP: " + WiFi.localIP().toString());
   }
   showIP = true;
   ipDisplayStartTime = millis();
@@ -346,7 +255,7 @@ void connectWiFi() {
 String scanWiFiNetworks() {
   String wifiOptions = "";
   int n = WiFi.scanNetworks();
-  for (int i = 0; i < n; i++) {
+  for (int i = 0; i < n && i < 10; i++) {
     wifiOptions += "<option value='" + WiFi.SSID(i) + "'>" + WiFi.SSID(i) + " (" + WiFi.RSSI(i) + " dBm)</option>";
   }
   return wifiOptions;
@@ -362,79 +271,58 @@ void updateApiUrls() {
 void handleRoot() {
   String ipAddress = WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : WiFi.softAPIP().toString();
   String wifiOptions = scanWiFiNetworks();
-  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>";
-  html += "<title>Weather Station</title>";
-  html += "<style>";
-  html += "body{font-family:Arial,sans-serif;margin:0 auto;padding:10px;background:#f0f0f0}";
-  html += ".container{max-width:500px;margin:0 auto}";
-  html += "h1{font-size:24px;color:#333}";
-  html += ".tab{overflow:hidden;background:#e0e0e0}";
-  html += ".tab button{background:#e0e0e0;border:none;padding:12px 16px;cursor:pointer;font-size:16px}";
-  html += ".tab button:hover{background:#d0d0d0}";
-  html += ".tab button.active{background:#c0c0c0}";
-  html += ".tabcontent{padding:10px;border:1px solid #ccc;border-top:none;background:white}";
-  html += "select,input,button{width:100%;padding:8px;margin:5px 0;border:1px solid #ccc;border-radius:4px}";
-  html += "button{background:#4CAF50;color:white;border:none}";
-  html += "button:hover{background:#45a049}";
-  html += ".info-box{padding:10px;background:#e3f2fd;border-radius:4px;margin-bottom:10px}";
-  html += "</style></head>";
-  html += "<body><div class='container'>";
-  html += "<h1>Weather Station Config</h1>";
-  html += "<div class='info-box'>Current IP: " + ipAddress + "</div>";
-  html += "<div class='tab'>";
-  html += "<button class='tablinks' onclick=\"openTab('wifi')\">WiFi</button>";
-  html += "<button class='tablinks' onclick=\"openTab('location')\">Location</button>";
-  html += "<button class='tablinks' onclick=\"openTab('display')\">Display</button>";
-  html += "<button class='tablinks' onclick=\"openTab('ota')\">OTA Update</button>";
-  html += "</div>";
-  html += "<div id='wifi' class='tabcontent'>";
-  html += "<h2>WiFi Settings</h2>";
-  html += "<form action='/savewifi' method='post'>";
-  html += "<label>WiFi Network:</label>";
-  html += "<select name='ssid'>" + wifiOptions + "</select>";
-  html += "<label>Password:</label>";
-  html += "<input type='password' name='password' placeholder='Enter WiFi password'>";
-  html += "<button type='submit'>Save WiFi</button>";
-  html += "</form>";
-  html += "</div>";
-  html += "<div id='location' class='tabcontent'>";
-  html += "<h2>Location Settings</h2>";
-  html += "<form action='/savelocation' method='post'>";
-  html += "<label>City:</label>";
-  html += "<input type='text' name='city' value='" + String(config.city) + "' placeholder='Enter city name'>";
-  html += "<button type='submit'>Save Location</button>";
-  html += "</form>";
-  html += "</div>";
-  html += "<div id='display' class='tabcontent'>";
-  html += "<h2>Display Settings</h2>";
-  html += "<form action='/savedisplay' method='post'>";
-  html += "<label>Display Layout:</label>";
-  html += "<select name='layout'>";
-  html += "<option value='0'" + String(config.displayLayout == 0 ? " selected" : "") + ">Original Layout</option>";
-  html += "<option value='1'" + String(config.displayLayout == 1 ? " selected" : "") + ">New Layout</option>";
-  html += "<option value='2'" + String(config.displayLayout == 2 ? " selected" : "") + ">Clock Layout</option>";
-  html += "<option value='3'" + String(config.displayLayout == 3 ? " selected" : "") + ">Clock 2</option>";
-  html += "<option value='4'" + String(config.displayLayout == 4 ? " selected" : "") + ">Clock 3</option>";
-  html += "</select>";
-  html += "<button type='submit'>Save Display</button>";
-  html += "</form>";
-  html += "</div>";
-  html += "<div id='ota' class='tabcontent'>";
-  html += "<h2>OTA Update</h2>";
-  html += "<form action='/otalogin'>";
-  html += "<button type='submit'>Go to OTA Login</button>";
-  html += "</form>";
-  html += "</div>";
-  html += "<script>";
-  html += "function openTab(tabName) {";
-  html += "var i, tabcontent = document.getElementsByClassName('tabcontent'), tablinks = document.getElementsByClassName('tablinks');";
-  html += "for(i=0;i<tabcontent.length;i++) tabcontent[i].style.display='none';";
-  html += "for(i=0;i<tablinks.length;i++) tablinks[i].className=tablinks[i].className.replace(' active','');";
-  html += "document.getElementById(tabName).style.display='block';";
-  html += "event.currentTarget.className+=' active';}";
-  html += "document.getElementsByClassName('tablinks')[0].click();";
-  html += "</script>";
-  html += "</div></body></html>";
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Weather Station</title><style>"
+                "body{font-family:Arial;margin:0 auto;padding:10px;background:#f0f0f0}"
+                ".container{max-width:500px;margin:0 auto}"
+                "h1{font-size:24px;color:#333}"
+                ".tab{overflow:hidden;background:#e0e0e0}"
+                ".tab button{background:#e0e0e0;border:none;padding:12px 16px;cursor:pointer;font-size:16px}"
+                ".tab button:hover{background:#d0d0d0}"
+                ".tab button.active{background:#c0c0c0}"
+                ".tabcontent{padding:10px;border:1px solid #ccc;border-top:none;background:white;display:none}"
+                "select,input,button{width:100%;padding:8px;margin:5px 0;border:1px solid #ccc;border-radius:4px}"
+                "button{background:#4CAF50;color:white;border:none}"
+                "button:hover{background:#45a049}"
+                ".info-box{padding:10px;background:#e3f2fd;border-radius:4px;margin-bottom:10px}"
+                "</style></head><body><div class='container'>"
+                "<h1>Weather Station Config</h1>"
+                "<div class='info-box'>IP: " + ipAddress + "</div>"
+                "<div class='tab'>"
+                "<button class='tablinks' onclick=\"openTab('wifi')\">WiFi</button>"
+                "<button class='tablinks' onclick=\"openTab('location')\">Location</button>"
+                "<button class='tablinks' onclick=\"openTab('display')\">Display</button>"
+                "<button class='tablinks' onclick=\"openTab('ota')\">OTA</button></div>"
+                "<div id='wifi' class='tabcontent'>"
+                "<h2>WiFi Settings</h2><form action='/savewifi' method='post'>"
+                "<label>WiFi Network:</label><select name='ssid'>" + wifiOptions + "</select>"
+                "<label>Password:</label><input type='password' name='password' placeholder='Enter WiFi password'>"
+                "<button type='submit'>Save WiFi</button></form></div>"
+                "<div id='location' class='tabcontent'>"
+                "<h2>Location Settings</h2><form action='/savelocation' method='post'>"
+                "<label>City:</label><input type='text' name='city' value='" + String(config.city) + "' placeholder='Enter city name'>"
+                "<button type='submit'>Save Location</button></form></div>"
+                "<div id='display' class='tabcontent'>"
+                "<h2>Display Settings</h2><form action='/savedisplay' method='post'>"
+                "<label>Display Layout:</label><select name='layout'>"
+                "<option value='0'" + String(config.displayLayout == 0 ? " selected" : "") + ">Original Layout</option>"
+                "<option value='1'" + String(config.displayLayout == 1 ? " selected" : "") + ">New Layout</option>"
+                "<option value='2'" + String(config.displayLayout == 2 ? " selected" : "") + ">Clock Layout</option>"
+                "<option value='3'" + String(config.displayLayout == 3 ? " selected" : "") + ">Clock 2</option>"
+                "<option value='4'" + String(config.displayLayout == 4 ? " selected" : "") + ">Clock 3</option>"
+                "</select><button type='submit'>Save Display</button></form></div>"
+                "<div id='ota' class='tabcontent'>"
+                "<h2>OTA Update</h2><form action='/otalogin'>"
+                "<button type='submit'>Go to OTA Login</button></form></div>"
+                "<script>function openTab(tabName){"
+                "var i,tabcontent=document.getElementsByClassName('tabcontent'),"
+                "tablinks=document.getElementsByClassName('tablinks');"
+                "for(i=0;i<tabcontent.length;i++)tabcontent[i].style.display='none';"
+                "for(i=0;i<tablinks.length;i++)tablinks[i].className=tablinks[i].className.replace(' active','');"
+                "document.getElementById(tabName).style.display='block';"
+                "event.currentTarget.className+=' active';}"
+                "document.getElementsByClassName('tablinks')[0].click();</script>"
+                "</div></body></html>";
   server.send(200, "text/html", html);
 }
 
@@ -444,11 +332,13 @@ void handleSaveWifi() {
     strncpy(config.ssid, server.arg("ssid").c_str(), sizeof(config.ssid));
     strncpy(config.password, server.arg("password").c_str(), sizeof(config.password));
     saveConfig();
-    server.send(200, "text/html", "<!DOCTYPE html><html><body><h1>WiFi Settings Saved</h1><p>Reconnecting...</p><script>setTimeout(() => location.href='/', 2000);</script></body></html>");
+    server.send(200, "text/html", "<!DOCTYPE html><html><body><h1>WiFi Saved</h1><p>Reconnecting...</p>"
+                                  "<script>setTimeout(() => location.href='/', 2000);</script></body></html>");
     WiFi.disconnect();
     connectWiFi();
   } else {
-    server.send(400, "text/html", "<!DOCTYPE html><html><body><h1>Error</h1><p>Missing parameters</p><a href='/'>Back</a></body></html>");
+    server.send(400, "text/html", "<!DOCTYPE html><html><body><h1>Error</h1><p>Missing parameters</p>"
+                                  "<a href='/'>Back</a></body></html>");
   }
 }
 
@@ -459,9 +349,11 @@ void handleSaveLocation() {
     saveConfig();
     updateApiUrls();
     getWeatherData();
-    server.send(200, "text/html", "<!DOCTYPE html><html><body><h1>Location Saved</h1><p>Weather data updating...</p><script>setTimeout(() => location.href='/', 2000);</script></body></html>");
+    server.send(200, "text/html", "<!DOCTYPE html><html><body><h1>Location Saved</h1><p>Weather updating...</p>"
+                                  "<script>setTimeout(() => location.href='/', 2000);</script></body></html>");
   } else {
-    server.send(400, "text/html", "<!DOCTYPE html><html><body><h1>Error</h1><p>Missing city parameter</p><a href='/'>Back</a></body></html>");
+    server.send(400, "text/html", "<!DOCTYPE html><html><body><h1>Error</h1><p>Missing city</p>"
+                                  "<a href='/'>Back</a></body></html>");
   }
 }
 
@@ -470,31 +362,30 @@ void handleSaveDisplay() {
   if (server.hasArg("layout")) {
     config.displayLayout = server.arg("layout").toInt();
     saveConfig();
-    server.send(200, "text/html", "<!DOCTYPE html><html><body><h1>Display Settings Saved</h1><p>Display updating...</p><script>setTimeout(() => location.href='/', 2000);</script></body></html>");
+    server.send(200, "text/html", "<!DOCTYPE html><html><body><h1>Display Saved</h1><p>Display updating...</p>"
+                                  "<script>setTimeout(() => location.href='/', 2000);</script></body></html>");
   } else {
-    server.send(400, "text/html", "<!DOCTYPE html><html><body><h1>Error</h1><p>Missing layout parameter</p><a href='/'>Back</a></body></html>");
+    server.send(400, "text/html", "<!DOCTYPE html><html><body><h1>Error</h1><p>Missing layout</p>"
+                                  "<a href='/'>Back</a></body></html>");
   }
 }
 
 // Xử lý trang đăng nhập OTA
 void handleOTALogin() {
-  server.sendHeader("Connection", "close");
   server.send(200, "text/html", loginIndex);
   displayOTAStatus("OTA Login Page");
 }
 
 // Xử lý trang OTA
 void handleOTA() {
-  server.sendHeader("Connection", "close");
   server.send(200, "text/html", otaIndex);
   displayOTAStatus("OTA Upload Page", 0, "Ready");
 }
 
 // Xử lý cập nhật OTA
 void handleOTAUpdate() {
-  server.sendHeader("Connection", "close");
   bool updateSuccess = !Update.hasError();
-  server.send(200, "text/plain", updateSuccess ? "Cập nhật THÀNH CÔNG! Thiết bị đang khởi động lại..." : "Cập nhật THẤT BẠI!");
+  server.send(200, "text/plain", updateSuccess ? "Cập nhật THÀNH CÔNG! Đang khởi động lại..." : "Cập nhật THẤT BẠI!");
   displayOTAStatus(updateSuccess ? "THANH CONG!" : "THAT BAI!");
   if (updateSuccess) {
     displayOTAStatus("Dang khoi dong lai...");
@@ -505,30 +396,23 @@ void handleOTAUpdate() {
 
 // Hàm lấy dữ liệu thời tiết
 void getWeatherData() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("No WiFi connection - cannot get weather data");
-    return;
-  }
+  if (WiFi.status() != WL_CONNECTED) return;
   HTTPClient http;
   http.begin(weatherUrl);
   int httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
-    String payload = http.getString();
-    DynamicJsonDocument doc(1024);
-    deserializeJson(doc, payload);
+    DynamicJsonDocument doc(512);
+    deserializeJson(doc, http.getString());
     temp = doc["main"]["temp"];
     humidity = doc["main"]["humidity"];
     dewPoint = temp - ((100 - humidity) / 5.0);
-  } else {
-    Serial.println("Failed to get current weather data");
   }
   http.end();
   http.begin(forecastUrl);
   httpCode = http.GET();
   if (httpCode == HTTP_CODE_OK) {
-    String payload = http.getString();
-    DynamicJsonDocument doc(2048);
-    deserializeJson(doc, payload);
+    DynamicJsonDocument doc(1024);
+    deserializeJson(doc, http.getString());
     time_t now = timeClient.getEpochTime();
     time_t tomorrowNoon = now + 24 * 3600;
     struct tm *timeInfo = localtime(&tomorrowNoon);
@@ -543,25 +427,37 @@ void getWeatherData() {
         tomorrowTemp = forecast["main"]["temp"];
         tomorrowHumidity = forecast["main"]["humidity"];
         tomorrowWeather = getVietnameseWeather(forecast["weather"][0]["main"].as<String>());
-        Serial.println("Tomorrow Weather: " + tomorrowWeather);
         break;
       }
     }
-  } else {
-    Serial.println("Failed to get forecast data");
   }
   http.end();
 }
 
 // Hàm hiển thị trên OLED
 void displayOLED() {
+  static String lastTimeStr, lastDateStr, lastTomorrowWeather;
+  static float lastTemp = -999, lastHumidity = -999, lastTomorrowTemp = -999, lastTomorrowHumidity = -999;
+  String timeStr = timeClient.getFormattedTime();
+  String dateStr = String(day()) + "." + String(month()) + "." + String(year() % 100);
+
+  if (lastTimeStr == timeStr && lastDateStr == dateStr && lastTemp == temp && lastHumidity == humidity &&
+      lastTomorrowTemp == tomorrowTemp && lastTomorrowHumidity == tomorrowHumidity && lastTomorrowWeather == tomorrowWeather) {
+    return;
+  }
+  lastTimeStr = timeStr;
+  lastDateStr = dateStr;
+  lastTemp = temp;
+  lastHumidity = humidity;
+  lastTomorrowTemp = tomorrowTemp;
+  lastTomorrowHumidity = tomorrowHumidity;
+  lastTomorrowWeather = tomorrowWeather;
+
   u8g2.clearBuffer();
   u8g2.setFontMode(0);
   u8g2.setBitmapMode(1);
 
   if (config.displayLayout == 0) {
-    String timeStr = timeClient.getFormattedTime();
-    String dateStr = String(day()) + "." + String(month()) + "." + String(year() % 100);
     String timeDate = timeStr + " - " + dateStr;
     u8g2.setFont(u8g2_font_profont11_tr);
     u8g2.drawStr(7, 7, timeDate.c_str());
@@ -584,8 +480,6 @@ void displayOLED() {
     u8g2.drawLine(62, 50, 62, 63);
     u8g2.drawLine(7, 42, 119, 42);
   } else if (config.displayLayout == 1) {
-    String timeStr = timeClient.getFormattedTime();
-    String dateStr = String(day()) + "." + String(month()) + "." + String(year() % 100);
     String timeDate = timeStr + " - " + dateStr;
     u8g2.setFont(u8g2_font_profont11_tr);
     u8g2.drawStr(7, 7, timeDate.c_str());
@@ -611,34 +505,21 @@ void displayOLED() {
     u8g2.drawLine(24, 29, 54, 29);
     u8g2.drawLine(91, 29, 121, 29);
   } else if (config.displayLayout == 2) {
-    // Giao diện đồng hồ mới
-    String timeStr = timeClient.getFormattedTime().substring(0, 5); // Lấy HH:MM
-    u8g2.setFontMode(1); // Trong suốt để phù hợp với đồng hồ
-    u8g2.setFont(u8g2_font_timR24_tr);
-    u8g2.drawStr(25, 43, timeStr.c_str());
-  } else if (config.displayLayout == 3) {
-    u8g2.clearBuffer();
     u8g2.setFontMode(1);
-    u8g2.setBitmapMode(1);
-
-    // Hiển thị thời gian
-    String timeStr = timeClient.getFormattedTime().substring(0, 5); // Lấy HH:MM
+    u8g2.setFont(u8g2_font_timR24_tr);
+    u8g2.drawStr(25, 43, timeStr.substring(0, 5).c_str());
+  } else if (config.displayLayout == 3) {
+    u8g2.setFontMode(1);
     u8g2.setFont(u8g2_font_profont29_tr);
-    u8g2.drawStr(19, 40, timeStr.c_str());
-
-    // Hiển thị giây
+    u8g2.drawStr(19, 40, timeStr.substring(0, 5).c_str());
     u8g2.setFont(u8g2_font_profont17_tr);
-    u8g2.drawStr(101, 40, timeClient.getFormattedTime().substring(6, 8).c_str());
-
-    // Hiển thị ngày
-    String dateStr = String(day()) + "/" + String(month()) + "/" + String(year());
+    u8g2.drawStr(101, 40, timeStr.substring(6, 8).c_str());
     u8g2.setFont(u8g2_font_profont10_tr);
-    u8g2.drawStr(12, 56, dateStr.c_str());
-
-    // Hiển thị ngày trong tuần
+    String dateStrFull = String(day()) + "/" + String(month()) + "/" + String(year());
+    u8g2.drawStr(12, 56, dateStrFull.c_str());
     u8g2.setDrawColor(2);
     u8g2.setFont(u8g2_font_helvB08_tr);
-    String dayOfWeek = String(timeClient.getDay());
+    String dayOfWeek;
     switch (timeClient.getDay()) {
       case 0: dayOfWeek = "Sun"; break;
       case 1: dayOfWeek = "Mon"; break;
@@ -649,8 +530,6 @@ void displayOLED() {
       case 6: dayOfWeek = "Sat"; break;
     }
     u8g2.drawStr(73, 53, dayOfWeek.c_str());
-
-    // Vẽ các đường line, frame, box, và hình XBM như bạn cung cấp
     u8g2.setDrawColor(1);
     u8g2.drawLine(13, 23, 21, 15);
     u8g2.drawLine(21, 15, 99, 15);
@@ -710,56 +589,39 @@ void displayOLED() {
     u8g2.drawLine(11, 59, 63, 59);
     u8g2.drawLine(13, 45, 7, 51);
     u8g2.drawLine(7, 55, 11, 59);
-
-  }else if (config.displayLayout == 4) {
-    u8g2.clearBuffer();
+  } else if (config.displayLayout == 4) {
     u8g2.setFontMode(1);
-    u8g2.setBitmapMode(1);
-
-    // Hiển thị thời gian
-    String timeStr = timeClient.getFormattedTime().substring(0, 5); // Lấy HH:MM
     u8g2.setFont(u8g2_font_profont29_tr);
-    u8g2.drawStr(27, 41, timeStr.substring(0, 2).c_str()); // Giờ
-    u8g2.drawStr(57, 39, ":"); // Dấu hai chấm
-    u8g2.drawStr(70, 41, timeStr.substring(3, 5).c_str()); // Phút
-
-    // Hiển thị giây
+    u8g2.drawStr(27, 41, timeStr.substring(0, 2).c_str());
+    u8g2.drawStr(57, 39, ":");
+    u8g2.drawStr(70, 41, timeStr.substring(3, 5).c_str());
     u8g2.setFont(u8g2_font_profont15_tr);
-    u8g2.drawStr(110, 44, timeClient.getFormattedTime().substring(6, 8).c_str());
-
-    // Hiển thị AM/PM
+    u8g2.drawStr(110, 44, timeStr.substring(6, 8).c_str());
     u8g2.setFont(u8g2_font_haxrcorp4089_tr);
     u8g2.drawStr(110, 32, timeClient.getHours() >= 12 ? "PM" : "AM");
-
-    // Vẽ các đường kẻ
     u8g2.drawLine(27, 44, 40, 44);
     u8g2.drawLine(43, 44, 56, 44);
     u8g2.drawLine(70, 44, 83, 44);
     u8g2.drawLine(86, 44, 99, 44);
     u8g2.drawLine(110, 22, 122, 22);
-
-    // Vẽ hình ảnh XBM
     u8g2.drawXBM(0, 0, 128, 11, image_Background_bits);
     u8g2.drawXBM(-2, 53, 128, 11, image_Background_1_bits);
     u8g2.drawXBM(4, 23, 18, 21, image_EviSmile1_bits);
-
   }
-
   u8g2.sendBuffer();
 }
 
 void setup() {
   Serial.begin(115200);
-  EEPROM.begin(sizeof(Config));
   loadConfig();
   myWire.begin(26, 27);
   u8g2.setBusClock(400000);
   u8g2.begin();
-  u8g2.setFontMode(0);
-  u8g2.setBitmapMode(1);
   connectWiFi();
   if (MDNS.begin(host)) {
-    Serial.println("mDNS started: http://" + String(host) + ".local");
+    Serial.print("mDNS started: http://");
+    Serial.print(host);
+    Serial.println(".local");
   }
   updateApiUrls();
   timeClient.begin();
@@ -774,12 +636,10 @@ void setup() {
   server.on("/update", HTTP_POST, handleOTAUpdate, []() {
     HTTPUpload& upload = server.upload();
     if (upload.status == UPLOAD_FILE_START) {
-      Serial.printf("Cập nhật: %s\n", upload.filename.c_str());
       isUpdating = true;
       updateStatus = "Dang cap nhat...";
-      displayOTAStatus("Dang cap nhat...", 0, upload.filename);
+      displayOTAStatus(updateStatus, 0, upload.filename);
       if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
-        Update.printError(Serial);
         updateStatus = "Loi: Khong the bat dau!";
         displayOTAStatus(updateStatus);
       }
@@ -789,17 +649,14 @@ void setup() {
         displayOTAStatus("Dang cap nhat...", progress, upload.filename);
       }
       if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
-        Update.printError(Serial);
         updateStatus = "Loi: Ghi du lieu!";
         displayOTAStatus(updateStatus);
       }
     } else if (upload.status == UPLOAD_FILE_END) {
       if (Update.end(true)) {
-        Serial.printf("Cập nhật thành công: %u bytes\n", upload.totalSize);
         updateStatus = "Cap nhat thanh cong!";
         displayOTAStatus(updateStatus, 100, upload.filename);
       } else {
-        Update.printError(Serial);
         updateStatus = "Loi: Hoan tat cap nhat!";
         displayOTAStatus(updateStatus);
       }
@@ -813,9 +670,7 @@ void setup() {
 
 void loop() {
   server.handleClient();
-  if (isUpdating) {
-    return;
-  }
+  if (isUpdating) return;
   if (showIP && millis() - ipDisplayStartTime < IP_DISPLAY_DURATION) {
     displayIPAddress();
   } else {
@@ -824,7 +679,7 @@ void loop() {
       timeClient.update();
       setTime(timeClient.getEpochTime());
       static unsigned long lastWeatherUpdate = 0;
-      if (millis() - lastWeatherUpdate > 600000 || lastWeatherUpdate == 0) {
+      if (millis() - lastWeatherUpdate > 900000 || lastWeatherUpdate == 0) {
         getWeatherData();
         lastWeatherUpdate = millis();
       }
@@ -832,13 +687,11 @@ void loop() {
     } else {
       u8g2.clearBuffer();
       u8g2.setFont(u8g2_font_profont11_tr);
-      u8g2.setFontMode(0);
-      u8g2.setBitmapMode(1);
       u8g2.drawStr(10, 20, "No WiFi connection");
       u8g2.drawStr(10, 35, "Connect to AP:");
       u8g2.drawStr(10, 50, "WeatherStation");
       u8g2.sendBuffer();
     }
   }
-  delay(1000);
+  delay(500);
 }
